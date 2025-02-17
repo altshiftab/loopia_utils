@@ -9,11 +9,13 @@ import (
 	motmedelHttpUtils "github.com/Motmedel/utils_go/pkg/http/utils"
 	"github.com/Motmedel/utils_go/pkg/net/domain_breakdown"
 	loopiaUtilsErrors "github.com/altshiftab/loopia_utils/pkg/errors"
+	loopiaUtilsTypes "github.com/altshiftab/loopia_utils/pkg/types"
 	"net/http"
 	"strings"
 )
 
 const BaseUrlString = "https://api.loopia.se/RPCSERV"
+const DefaultTtlValue = 3600
 
 type Client struct {
 	ApiUser     string
@@ -38,9 +40,13 @@ func parseDomain(domain string) (string, string, error) {
 	return domainBreakdown.RegisteredDomain, subdomain, nil
 }
 
-func (c *Client) AddTxtRecord(domain string, ttl int, value string) (*motmedelHttpTypes.HttpContext, error) {
-	if domain == "" {
+func (client *Client) AddRecord(record *loopiaUtilsTypes.Record, domain string) (*motmedelHttpTypes.HttpContext, error) {
+	if record == nil {
 		return nil, nil
+	}
+
+	if domain == "" {
+		return nil, loopiaUtilsErrors.ErrEmptyDomain
 	}
 
 	registeredDomain, subdomain, err := parseDomain(domain)
@@ -55,30 +61,37 @@ func (c *Client) AddTxtRecord(domain string, ttl int, value string) (*motmedelHt
 		return nil, loopiaUtilsErrors.ErrEmptyRegisteredDomain
 	}
 	if subdomain == "" {
+		// This covers a potential error in `parseDomain`; the subdomain should be `@` if the call concerns a
+		// registered domain.
 		return nil, loopiaUtilsErrors.ErrEmptySubdomain
+	}
+
+	ttl := record.Ttl
+	if ttl == 0 {
+		ttl = DefaultTtlValue
 	}
 
 	call := &methodCall{
 		MethodName: "addZoneRecord",
 		Params: []param{
-			paramString{Value: c.ApiUser},
-			paramString{Value: c.ApiPassword},
+			paramString{Value: client.ApiUser},
+			paramString{Value: client.ApiPassword},
 			paramString{Value: registeredDomain},
 			paramString{Value: subdomain},
 			paramStruct{
 				StructMembers: []structMember{
-					structMemberString{Name: "type", Value: "TXT"},
+					structMemberString{Name: "type", Value: record.Type},
 					structMemberInt{Name: "ttl", Value: ttl},
-					structMemberInt{Name: "priority", Value: 0},
-					structMemberString{Name: "rdata", Value: value},
-					structMemberInt{Name: "record_id", Value: 0},
+					structMemberInt{Name: "priority", Value: record.Priority},
+					structMemberString{Name: "rdata", Value: record.Rdata},
+					structMemberInt{Name: "record_id", Value: record.Id},
 				},
 			},
 		},
 	}
 	resp := &responseString{}
 
-	httpContext, err := c.rpcCall(call, resp)
+	httpContext, err := client.rpcCall(call, resp)
 	if err != nil {
 		return httpContext, &motmedelErrors.CauseError{
 			Message: "An error occurred when making the call.",
@@ -98,7 +111,7 @@ func (c *Client) AddTxtRecord(domain string, ttl int, value string) (*motmedelHt
 	return httpContext, nil
 }
 
-func (c *Client) RemoveTxtRecord(domain string, recordId int) (*motmedelHttpTypes.HttpContext, error) {
+func (client *Client) RemoveRecord(domain string, recordId int) (*motmedelHttpTypes.HttpContext, error) {
 	if domain == "" {
 		return nil, nil
 	}
@@ -121,8 +134,8 @@ func (c *Client) RemoveTxtRecord(domain string, recordId int) (*motmedelHttpType
 	call := &methodCall{
 		MethodName: "removeZoneRecord",
 		Params: []param{
-			paramString{Value: c.ApiUser},
-			paramString{Value: c.ApiPassword},
+			paramString{Value: client.ApiUser},
+			paramString{Value: client.ApiPassword},
 			paramString{Value: registeredDomain},
 			paramString{Value: subdomain},
 			paramInt{Value: recordId},
@@ -130,7 +143,7 @@ func (c *Client) RemoveTxtRecord(domain string, recordId int) (*motmedelHttpType
 	}
 	resp := &responseString{}
 
-	httpContext, err := c.rpcCall(call, resp)
+	httpContext, err := client.rpcCall(call, resp)
 	if err != nil {
 		return httpContext, &motmedelErrors.CauseError{
 			Message: "An error occurred when making the call.",
@@ -150,7 +163,7 @@ func (c *Client) RemoveTxtRecord(domain string, recordId int) (*motmedelHttpType
 	return httpContext, nil
 }
 
-func (c *Client) GetTxtRecords(domain string) ([]*Record, *motmedelHttpTypes.HttpContext, error) {
+func (client *Client) GetRecords(domain string) ([]*loopiaUtilsTypes.Record, *motmedelHttpTypes.HttpContext, error) {
 	if domain == "" {
 		return nil, nil, nil
 	}
@@ -173,15 +186,15 @@ func (c *Client) GetTxtRecords(domain string) ([]*Record, *motmedelHttpTypes.Htt
 	call := &methodCall{
 		MethodName: "getZoneRecords",
 		Params: []param{
-			paramString{Value: c.ApiUser},
-			paramString{Value: c.ApiPassword},
+			paramString{Value: client.ApiUser},
+			paramString{Value: client.ApiPassword},
 			paramString{Value: registeredDomain},
 			paramString{Value: subdomain},
 		},
 	}
 	resp := &recordObjectsResponse{}
 
-	httpContext, err := c.rpcCall(call, resp)
+	httpContext, err := client.rpcCall(call, resp)
 	if err != nil {
 		return nil, httpContext, &motmedelErrors.CauseError{
 			Message: "An error occurred when making the call.",
@@ -192,8 +205,7 @@ func (c *Client) GetTxtRecords(domain string) ([]*Record, *motmedelHttpTypes.Htt
 	return resp.Params, httpContext, nil
 }
 
-// RemoveSubdomain remove a sub-domain.
-func (c *Client) RemoveSubdomain(domain string) (*motmedelHttpTypes.HttpContext, error) {
+func (client *Client) RemoveSubdomain(domain string) (*motmedelHttpTypes.HttpContext, error) {
 	if domain == "" {
 		return nil, nil
 	}
@@ -216,15 +228,15 @@ func (c *Client) RemoveSubdomain(domain string) (*motmedelHttpTypes.HttpContext,
 	call := &methodCall{
 		MethodName: "removeSubdomain",
 		Params: []param{
-			paramString{Value: c.ApiUser},
-			paramString{Value: c.ApiPassword},
+			paramString{Value: client.ApiUser},
+			paramString{Value: client.ApiPassword},
 			paramString{Value: domain},
 			paramString{Value: subdomain},
 		},
 	}
 	resp := &responseString{}
 
-	httpContext, err := c.rpcCall(call, resp)
+	httpContext, err := client.rpcCall(call, resp)
 	if err != nil {
 		return httpContext, &motmedelErrors.CauseError{
 			Message: "An error occurred when making the call.",
@@ -244,7 +256,7 @@ func (c *Client) RemoveSubdomain(domain string) (*motmedelHttpTypes.HttpContext,
 	return httpContext, nil
 }
 
-func (c *Client) rpcCall(call *methodCall, resultTarget response) (*motmedelHttpTypes.HttpContext, error) {
+func (client *Client) rpcCall(call *methodCall, resultTarget response) (*motmedelHttpTypes.HttpContext, error) {
 	if call == nil {
 		return nil, nil
 	}
@@ -268,7 +280,7 @@ func (c *Client) rpcCall(call *methodCall, resultTarget response) (*motmedelHttp
 	requestBody := requestBodyBuffer.Bytes()
 
 	httpContext, err := motmedelHttpUtils.SendRequest(
-		c.HttpClient,
+		client.HttpClient,
 		requestMethod,
 		requestUrl,
 		requestBody,

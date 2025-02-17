@@ -6,8 +6,7 @@ import (
 )
 
 var (
-	ErrNilDecoder            = errors.New("nil decoder")
-	ErrInvalidDomain         = errors.New("invalid domain")
+	ErrEmptyDomain           = errors.New("empty domain")
 	ErrEmptyRegisteredDomain = errors.New("empty registered domain")
 	ErrEmptySubdomain        = errors.New("empty subdomain")
 	ErrAuthenticationError   = errors.New("authentication error")

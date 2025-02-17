@@ -6,6 +6,7 @@ import (
 	motmedelLog "github.com/Motmedel/utils_go/pkg/log"
 	"github.com/Motmedel/utils_go/pkg/net/domain_breakdown"
 	"github.com/altshiftab/loopia_utils/pkg/loopia_utils"
+	loopiaUtilsTypes "github.com/altshiftab/loopia_utils/pkg/types"
 	"log/slog"
 	"net/http"
 	"time"
@@ -74,8 +75,10 @@ func main() {
 		HttpClient:  &http.Client{Timeout: 30 * time.Second},
 	}
 
-	ttl := 3600
-	_, err := client.AddTxtRecord(domain, ttl, record)
+	_, err := client.AddRecord(
+		&loopiaUtilsTypes.Record{Type: "TXT", Ttl: loopia_utils.DefaultTtlValue, Rdata: record},
+		domain,
+	)
 	if err != nil {
 		msg := "An error occurred when adding a TXT record."
 		motmedelLog.LogFatalWithExitingMessage(
@@ -83,7 +86,7 @@ func main() {
 			&motmedelErrors.InputError{
 				Message: msg,
 				Cause:   err,
-				Input:   []any{domain, ttl, record},
+				Input:   []any{record, domain},
 			},
 			logger,
 		)
