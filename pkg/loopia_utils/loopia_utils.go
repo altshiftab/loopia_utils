@@ -230,7 +230,7 @@ func (client *Client) RemoveSubdomain(domain string) (*motmedelHttpTypes.HttpCon
 		Params: []param{
 			paramString{Value: client.ApiUser},
 			paramString{Value: client.ApiPassword},
-			paramString{Value: domain},
+			paramString{Value: registeredDomain},
 			paramString{Value: subdomain},
 		},
 	}
