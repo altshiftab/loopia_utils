@@ -2,12 +2,15 @@ package loopia_utils
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
+	"fmt"
 	motmedelErrors "github.com/Motmedel/utils_go/pkg/errors"
 	motmedelHttpErrors "github.com/Motmedel/utils_go/pkg/http/errors"
 	motmedelHttpTypes "github.com/Motmedel/utils_go/pkg/http/types"
 	motmedelHttpUtils "github.com/Motmedel/utils_go/pkg/http/utils"
 	"github.com/Motmedel/utils_go/pkg/net/domain_breakdown"
+	motmedelNetErrors "github.com/Motmedel/utils_go/pkg/net/errors"
 	loopiaUtilsErrors "github.com/altshiftab/loopia_utils/pkg/errors"
 	loopiaUtilsTypes "github.com/altshiftab/loopia_utils/pkg/types"
 	"net/http"
@@ -18,18 +21,15 @@ const BaseUrlString = "https://api.loopia.se/RPCSERV"
 const DefaultTtlValue = 3600
 
 type Client struct {
+	*http.Client
 	ApiUser     string
 	ApiPassword string
-	HttpClient  motmedelHttpUtils.HttpClient
 }
 
 func parseDomain(domain string) (string, string, error) {
 	domainBreakdown := domain_breakdown.GetDomainBreakdown(domain)
 	if domainBreakdown == nil {
-		return "", "", &motmedelErrors.InputError{
-			Message: "The domain is invalid.",
-			Input:   domain,
-		}
+		return "", "", motmedelErrors.NewWithTrace(motmedelNetErrors.ErrNilDomainBreakdown)
 	}
 
 	subdomain := domainBreakdown.Subdomain
@@ -40,30 +40,24 @@ func parseDomain(domain string) (string, string, error) {
 	return domainBreakdown.RegisteredDomain, subdomain, nil
 }
 
-func (client *Client) AddRecord(record *loopiaUtilsTypes.Record, domain string) (*motmedelHttpTypes.HttpContext, error) {
+func (client *Client) AddRecord(ctx context.Context, record *loopiaUtilsTypes.Record, domain string) error {
 	if record == nil {
-		return nil, nil
+		return nil
 	}
 
 	if domain == "" {
-		return nil, loopiaUtilsErrors.ErrEmptyDomain
+		return motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrEmptyDomain)
 	}
 
 	registeredDomain, subdomain, err := parseDomain(domain)
 	if err != nil {
-		return nil, &motmedelErrors.InputError{
-			Message: "An error occurred when parsing the domain.",
-			Cause:   err,
-			Input:   domain,
-		}
+		return fmt.Errorf("parse domain: %w", err)
 	}
 	if registeredDomain == "" {
-		return nil, loopiaUtilsErrors.ErrEmptyRegisteredDomain
+		return motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrEmptyRegisteredDomain)
 	}
 	if subdomain == "" {
-		// This covers a potential error in `parseDomain`; the subdomain should be `@` if the call concerns a
-		// registered domain.
-		return nil, loopiaUtilsErrors.ErrEmptySubdomain
+		return motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrEmptySubdomain)
 	}
 
 	ttl := record.Ttl
@@ -91,44 +85,32 @@ func (client *Client) AddRecord(record *loopiaUtilsTypes.Record, domain string) 
 	}
 	resp := &responseString{}
 
-	httpContext, err := client.rpcCall(call, resp)
-	if err != nil {
-		return httpContext, &motmedelErrors.CauseError{
-			Message: "An error occurred when making the call.",
-			Cause:   err,
-		}
+	if err := client.rpcCall(ctx, call, resp); err != nil {
+		return motmedelErrors.New(fmt.Errorf("rpc call: %w", err), registeredDomain, subdomain)
 	}
 
 	responseValue := resp.Value
 	if err := checkResponse(responseValue); err != nil {
-		return httpContext, &motmedelErrors.InputError{
-			Message: "An error response was received.",
-			Cause:   err,
-			Input:   responseValue,
-		}
+		return motmedelErrors.New(fmt.Errorf("check response: %w", err), responseValue)
 	}
 
-	return httpContext, nil
+	return nil
 }
 
-func (client *Client) RemoveRecord(domain string, recordId int) (*motmedelHttpTypes.HttpContext, error) {
+func (client *Client) RemoveRecord(ctx context.Context, domain string, recordId int) error {
 	if domain == "" {
-		return nil, nil
+		return nil
 	}
 
 	registeredDomain, subdomain, err := parseDomain(domain)
 	if err != nil {
-		return nil, &motmedelErrors.InputError{
-			Message: "An error occurred when parsing the domain.",
-			Cause:   err,
-			Input:   domain,
-		}
+		return fmt.Errorf("parse domain: %w", err)
 	}
 	if registeredDomain == "" {
-		return nil, loopiaUtilsErrors.ErrEmptyRegisteredDomain
+		return motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrEmptyRegisteredDomain)
 	}
 	if subdomain == "" {
-		return nil, loopiaUtilsErrors.ErrEmptySubdomain
+		return motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrEmptySubdomain)
 	}
 
 	call := &methodCall{
@@ -143,44 +125,32 @@ func (client *Client) RemoveRecord(domain string, recordId int) (*motmedelHttpTy
 	}
 	resp := &responseString{}
 
-	httpContext, err := client.rpcCall(call, resp)
-	if err != nil {
-		return httpContext, &motmedelErrors.CauseError{
-			Message: "An error occurred when making the call.",
-			Cause:   err,
-		}
+	if err := client.rpcCall(ctx, call, resp); err != nil {
+		return motmedelErrors.New(fmt.Errorf("rpc call: %w", err), registeredDomain, subdomain)
 	}
 
 	responseValue := resp.Value
 	if err := checkResponse(responseValue); err != nil {
-		return httpContext, &motmedelErrors.InputError{
-			Message: "An error response was received.",
-			Cause:   err,
-			Input:   responseValue,
-		}
+		return motmedelErrors.New(fmt.Errorf("check response: %w", err), responseValue)
 	}
 
-	return httpContext, nil
+	return nil
 }
 
-func (client *Client) GetRecords(domain string) ([]*loopiaUtilsTypes.Record, *motmedelHttpTypes.HttpContext, error) {
+func (client *Client) GetRecords(ctx context.Context, domain string) ([]*loopiaUtilsTypes.Record, error) {
 	if domain == "" {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	registeredDomain, subdomain, err := parseDomain(domain)
 	if err != nil {
-		return nil, nil, &motmedelErrors.InputError{
-			Message: "An error occurred when parsing the domain.",
-			Cause:   err,
-			Input:   domain,
-		}
+		return nil, fmt.Errorf("parse domain: %w", err)
 	}
 	if registeredDomain == "" {
-		return nil, nil, loopiaUtilsErrors.ErrEmptyRegisteredDomain
+		return nil, motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrEmptyRegisteredDomain)
 	}
 	if subdomain == "" {
-		return nil, nil, loopiaUtilsErrors.ErrEmptySubdomain
+		return nil, motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrEmptySubdomain)
 	}
 
 	call := &methodCall{
@@ -194,35 +164,27 @@ func (client *Client) GetRecords(domain string) ([]*loopiaUtilsTypes.Record, *mo
 	}
 	resp := &recordObjectsResponse{}
 
-	httpContext, err := client.rpcCall(call, resp)
-	if err != nil {
-		return nil, httpContext, &motmedelErrors.CauseError{
-			Message: "An error occurred when making the call.",
-			Cause:   err,
-		}
+	if err := client.rpcCall(ctx, call, resp); err != nil {
+		return nil, motmedelErrors.New(fmt.Errorf("rpc call: %w", err), registeredDomain, subdomain)
 	}
 
-	return resp.Params, httpContext, nil
+	return resp.Params, nil
 }
 
-func (client *Client) RemoveSubdomain(domain string) (*motmedelHttpTypes.HttpContext, error) {
+func (client *Client) RemoveSubdomain(ctx context.Context, domain string) error {
 	if domain == "" {
-		return nil, nil
+		return nil
 	}
 
 	registeredDomain, subdomain, err := parseDomain(domain)
 	if err != nil {
-		return nil, &motmedelErrors.InputError{
-			Message: "An error occurred when parsing the domain.",
-			Cause:   err,
-			Input:   domain,
-		}
+		return fmt.Errorf("parse domain: %w", err)
 	}
 	if registeredDomain == "" {
-		return nil, loopiaUtilsErrors.ErrEmptyRegisteredDomain
+		return motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrEmptyRegisteredDomain)
 	}
 	if subdomain == "" {
-		return nil, loopiaUtilsErrors.ErrEmptySubdomain
+		return motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrEmptySubdomain)
 	}
 
 	call := &methodCall{
@@ -236,29 +198,25 @@ func (client *Client) RemoveSubdomain(domain string) (*motmedelHttpTypes.HttpCon
 	}
 	resp := &responseString{}
 
-	httpContext, err := client.rpcCall(call, resp)
-	if err != nil {
-		return httpContext, &motmedelErrors.CauseError{
-			Message: "An error occurred when making the call.",
-			Cause:   err,
-		}
+	if err := client.rpcCall(ctx, call, resp); err != nil {
+		return motmedelErrors.New(fmt.Errorf("rpc call: %w", err), registeredDomain, subdomain)
 	}
 
 	responseValue := resp.Value
 	if err := checkResponse(responseValue); err != nil {
-		return httpContext, &motmedelErrors.InputError{
-			Message: "An error response was received.",
-			Cause:   err,
-			Input:   responseValue,
-		}
+		return motmedelErrors.New(fmt.Errorf("check response: %w", err), responseValue)
 	}
 
-	return httpContext, nil
+	return nil
 }
 
-func (client *Client) rpcCall(call *methodCall, resultTarget response) (*motmedelHttpTypes.HttpContext, error) {
+func (client *Client) rpcCall(
+	ctx context.Context,
+	call *methodCall,
+	resultTarget response,
+) error {
 	if call == nil {
-		return nil, nil
+		return nil
 	}
 
 	requestBodyBuffer := new(bytes.Buffer)
@@ -268,82 +226,53 @@ func (client *Client) rpcCall(call *methodCall, resultTarget response) (*motmede
 	encoder.Indent("", "  ")
 
 	if err := encoder.Encode(call); err != nil {
-		return nil, &motmedelErrors.InputError{
-			Message: "An error occurred when encoding the call.",
-			Cause:   err,
-			Input:   call,
-		}
+		return motmedelErrors.NewWithTrace(fmt.Errorf("xml encoder encode: %w", err))
 	}
 
-	requestMethod := http.MethodPost
-	requestUrl := BaseUrlString
 	requestBody := requestBodyBuffer.Bytes()
-
-	httpContext, err := motmedelHttpUtils.SendRequest(
-		client.HttpClient,
-		requestMethod,
-		requestUrl,
-		requestBody,
-		func(request *http.Request) error {
-			if request == nil {
-				return motmedelHttpErrors.ErrNilHttpRequest
-			}
-
-			requestHeader := request.Header
-			if requestHeader == nil {
-				return motmedelHttpErrors.ErrNilHttpRequestHeader
-			}
-
-			requestHeader.Set("Content-Type", "text/xml")
-
-			return nil
+	_, responseBody, err := motmedelHttpUtils.Fetch(
+		ctx,
+		BaseUrlString,
+		client.Client,
+		&motmedelHttpTypes.FetchOptions{
+			Method:  http.MethodPost,
+			Headers: map[string]string{"Content-Type": "text/xml"},
+			Body:    requestBody,
 		},
 	)
 	if err != nil {
-		return httpContext, &motmedelErrors.InputError{
-			Message: "An error occurred when sending the request.",
-			Cause:   err,
-			Input:   []any{requestMethod, requestUrl, requestBody},
-		}
+		return motmedelErrors.New(fmt.Errorf("fetch: %w", err), requestBody)
 	}
-
-	if httpContext == nil {
-		return nil, motmedelHttpErrors.ErrNilHttpContext
-	}
-
-	responseBody := httpContext.ResponseBody
 	if len(responseBody) == 0 {
-		return httpContext, motmedelHttpErrors.ErrEmptyResponseBody
+		return motmedelErrors.NewWithTrace(motmedelHttpErrors.ErrEmptyResponseBody)
 	}
 
 	if err := xml.Unmarshal(responseBody, resultTarget); err != nil {
-		return httpContext, &motmedelErrors.InputError{
-			Message: "An error occurred when unmarshalling the response body.",
-			Cause:   err,
-			Input:   responseBody,
-		}
+		return motmedelErrors.NewWithTrace(
+			fmt.Errorf("xml unmarshal (response body): %w", err),
+			responseBody,
+		)
 	}
 
-	if resultTarget.faultCode() != 0 {
-		return httpContext, &RpcError{
-			Code:    resultTarget.faultCode(),
-			Message: strings.TrimSpace(resultTarget.faultString()),
-		}
+	if faultCode := resultTarget.faultCode(); faultCode != 0 {
+		return motmedelErrors.NewWithTrace(
+			&RpcError{
+				Code:    faultCode,
+				Message: strings.TrimSpace(resultTarget.faultString()),
+			},
+		)
 	}
 
-	return httpContext, nil
+	return nil
 }
 
 func checkResponse(value string) error {
-	switch v := strings.TrimSpace(value); v {
+	switch trimmedValue := strings.TrimSpace(value); trimmedValue {
 	case "OK":
 		return nil
 	case "AUTH_ERROR":
-		return loopiaUtilsErrors.ErrAuthenticationError
+		return motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrAuthenticationError)
 	default:
-		return &motmedelErrors.InputError{
-			Message: "An unknown status value was encountered.",
-			Input:   value,
-		}
+		return motmedelErrors.NewWithTrace(loopiaUtilsErrors.ErrUnexpectedStatus, trimmedValue)
 	}
 }

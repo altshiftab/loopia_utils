@@ -10,6 +10,7 @@ var (
 	ErrEmptyRegisteredDomain = errors.New("empty registered domain")
 	ErrEmptySubdomain        = errors.New("empty subdomain")
 	ErrAuthenticationError   = errors.New("authentication error")
+	ErrUnexpectedStatus      = errors.New("unexpected status")
 )
 
 type RpcError struct {

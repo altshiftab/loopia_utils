@@ -1,19 +1,23 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	motmedelErrors "github.com/Motmedel/utils_go/pkg/errors"
-	motmedelLog "github.com/Motmedel/utils_go/pkg/log"
+	motmedelErrorLogger "github.com/Motmedel/utils_go/pkg/log/error_logger"
 	"github.com/Motmedel/utils_go/pkg/net/domain_breakdown"
 	"github.com/altshiftab/loopia_utils/pkg/loopia_utils"
 	loopiaUtilsTypes "github.com/altshiftab/loopia_utils/pkg/types"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 )
 
 func main() {
-	logger := slog.Default()
+	logger := motmedelErrorLogger.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger.Logger)
 
 	var username string
 	flag.StringVar(
@@ -50,45 +54,44 @@ func main() {
 	flag.Parse()
 
 	if username == "" {
-		motmedelLog.LogFatalWithExitingMessage("The username is empty.", nil, logger)
+		logger.FatalWithExitingMessage("The username is empty.", nil)
 	}
 
 	if password == "" {
-		motmedelLog.LogFatalWithExitingMessage("The password is empty.", nil, logger)
+		logger.FatalWithExitingMessage("The password is empty.", nil)
 	}
 
 	if domain == "" {
-		motmedelLog.LogFatalWithExitingMessage("The domain is empty.", nil, logger)
+		logger.FatalWithExitingMessage("The domain is empty.", nil)
 	}
 
 	if record == "" {
-		motmedelLog.LogFatalWithExitingMessage("The record is empty.", nil, logger)
+		logger.FatalWithExitingMessage("The record is empty.", nil)
 	}
 
 	if domainBreakdown := domain_breakdown.GetDomainBreakdown(domain); domainBreakdown == nil {
-		motmedelLog.LogFatalWithExitingMessage("Invalid domain.", nil, logger)
+		logger.FatalWithExitingMessage("Invalid domain.", nil)
 	}
 
 	client := loopia_utils.Client{
+		Client:      &http.Client{Timeout: 30 * time.Second},
 		ApiUser:     username,
 		ApiPassword: password,
-		HttpClient:  &http.Client{Timeout: 30 * time.Second},
 	}
 
-	_, err := client.AddRecord(
+	err := client.AddRecord(
+		context.Background(),
 		&loopiaUtilsTypes.Record{Type: "TXT", Ttl: loopia_utils.DefaultTtlValue, Rdata: record},
 		domain,
 	)
 	if err != nil {
-		msg := "An error occurred when adding a TXT record."
-		motmedelLog.LogFatalWithExitingMessage(
-			msg,
-			&motmedelErrors.InputError{
-				Message: msg,
-				Cause:   err,
-				Input:   []any{record, domain},
-			},
-			logger,
+		logger.FatalWithExitingMessage(
+			"An error occurred when adding a TXT record.",
+			motmedelErrors.NewWithTrace(
+				fmt.Errorf("client add record: %w", err),
+				domain,
+				record,
+			),
 		)
 	}
 }
